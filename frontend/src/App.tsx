@@ -9,77 +9,18 @@ type Segment = { type: 'latex' | 'text' | 'placeholder'; content: string };
 type ConvertResponse = { segments?: Segment[] };
 type RawSegment = { type: 'math' | 'text'; content: string };
 type OutlineSummary = { label: string; kind: 'heading' | 'math' | 'list' | 'text' };
-type FormatToggle = {
-  id: string;
-  label: string;
-  description: string;
-  enableInstruction: string;
-  disableInstruction: string;
-};
+type FormatToggle = { id: string; label: string };
 type QuickPanel = 'table' | 'layout' | null;
 
 const FORMAT_TOGGLES: FormatToggle[] = [
-  {
-    id: 'bold',
-    label: 'B',
-    description: 'Toggle bold text',
-    enableInstruction:
-      'Begin bold emphasis using \\textbf{} commands for the following sentences until bold mode is disabled.',
-    disableInstruction: 'End the \\textbf{} emphasis and return to normal paragraph text.',
-  },
-  {
-    id: 'italic',
-    label: 'I',
-    description: 'Toggle italics',
-    enableInstruction:
-      'Start italicized narration using \\textit{} for the upcoming prose until italics are disabled.',
-    disableInstruction: 'Stop wrapping text with \\textit{} and revert to the default style.',
-  },
-  {
-    id: 'underline',
-    label: 'U',
-    description: 'Toggle underline',
-    enableInstruction: 'Underline the following statements using \\underline{} until underline mode is turned off.',
-    disableInstruction: 'End the underline styling and go back to body copy.',
-  },
-  {
-    id: 'heading1',
-    label: 'H1',
-    description: 'Level-one heading',
-    enableInstruction: 'Treat the next block as a level-one heading using \\section{} for strong prominence.',
-    disableInstruction: 'Close the \\section block and resume standard paragraphs.',
-  },
-  {
-    id: 'heading2',
-    label: 'H2',
-    description: 'Level-two heading',
-    enableInstruction: 'Format the upcoming block as a level-two heading using \\subsection{} beneath the current section.',
-    disableInstruction: 'End the \\subsection heading and continue with prose.',
-  },
-  {
-    id: 'bullets',
-    label: '\u2022',
-    description: 'Bullet list',
-    enableInstruction:
-      'Start an unordered list using the \\begin{itemize} environment and keep adding \\item entries until I end the list.',
-    disableInstruction: 'Finish the unordered list by closing with \\end{itemize} and return to paragraphs.',
-  },
-  {
-    id: 'numbered',
-    label: '1.',
-    description: 'Numbered list',
-    enableInstruction:
-      'Begin an ordered list using \\begin{enumerate} with \\item steps until disabled.',
-    disableInstruction: 'Terminate the ordered list with \\end{enumerate} and go back to prose.',
-  },
-  {
-    id: 'equation',
-    label: 'fx',
-    description: 'Math block',
-    enableInstruction:
-      'Prepare for display math using equation or aligned environments; render the following expressions as LaTeX equations.',
-    disableInstruction: 'End the display math section and return to prose narration.',
-  },
+  { id: 'bold', label: 'B' },
+  { id: 'italic', label: 'I' },
+  { id: 'underline', label: 'U' },
+  { id: 'heading1', label: 'H1' },
+  { id: 'heading2', label: 'H2' },
+  { id: 'bullets', label: '\u2022' },
+  { id: 'numbered', label: '1.' },
+  { id: 'equation', label: 'fx' },
 ];
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
@@ -95,7 +36,6 @@ function App() {
   const [syncEnabled, setSyncEnabled] = useState(true);
   const [parsedSegments, setParsedSegments] = useState<RawSegment[]>([]);
   const [showRawLatex, setShowRawLatex] = useState(false);
-  const [activeFormats, setActiveFormats] = useState<Record<string, boolean>>({});
   const [quickPanel, setQuickPanel] = useState<QuickPanel>(null);
   const [docTitle, setDocTitle] = useState('Untitled document');
   const [showCodeDrawer, setShowCodeDrawer] = useState(false);
@@ -264,16 +204,11 @@ function App() {
   const handleFormatToggle = (toggle: FormatToggle) => {
     const { text, start, end } = getSelectionSnapshot();
     if (text.trim()) {
-      const snippet = `${wrapInstruction(toggle.enableInstruction)}\n${text}\n${wrapInstruction(toggle.disableInstruction)}\n`;
+      const snippet = `${wrapInstruction(text)}\n`;
       replaceSelectionWith(snippet, start, end);
       return;
     }
-    setActiveFormats((prev) => {
-      const nextState = !prev[toggle.id];
-      const instruction = nextState ? toggle.enableInstruction : toggle.disableInstruction;
-      insertTextAtSelection(`${wrapInstruction(instruction)}\n`);
-      return { ...prev, [toggle.id]: nextState };
-    });
+    insertTextAtSelection(`${wrapInstruction(toggle.label)}\n`);
   };
 
   const handleInsertTable = () => {
@@ -411,7 +346,7 @@ function App() {
               Wrap math or layout instructions between <code>*asterisks*</code> to convert them. Text outside those
               markers stays as-is.
             </p>
-            <FormatToggleBar toggles={FORMAT_TOGGLES} active={activeFormats} onToggle={handleFormatToggle} />
+            <FormatToggleBar toggles={FORMAT_TOGGLES} onToggle={handleFormatToggle} />
           </div>
           <div className="header-actions">
             <button type="button" className="secondary-button" onClick={() => setShowCodeDrawer(true)}>
@@ -614,7 +549,6 @@ type StatusPillProps = { status: Status; errorMessage: string | null };
 type SegmentBlockProps = { segment: Segment; showRawLatex: boolean };
 type FormatToggleBarProps = {
   toggles: FormatToggle[];
-  active: Record<string, boolean>;
   onToggle: (toggle: FormatToggle) => void;
 };
 type DocumentOutlineProps = { segments: RawSegment[] };
@@ -682,23 +616,14 @@ function SegmentBlock({ segment, showRawLatex }: SegmentBlockProps) {
   return <p className="segment-block text">{segment.content}</p>;
 }
 
-function FormatToggleBar({ toggles, active, onToggle }: FormatToggleBarProps) {
+function FormatToggleBar({ toggles, onToggle }: FormatToggleBarProps) {
   return (
     <div className="format-toggle-bar">
-      {toggles.map((toggle) => {
-        const isActive = Boolean(active[toggle.id]);
-        return (
-          <button
-            key={toggle.id}
-            type="button"
-            className={`format-button ${isActive ? 'active' : ''}`}
-            title={toggle.description}
-            onClick={() => onToggle(toggle)}
-          >
-            {toggle.label}
-          </button>
-        );
-      })}
+      {toggles.map((toggle) => (
+        <button key={toggle.id} type="button" className="format-button" onClick={() => onToggle(toggle)}>
+          {toggle.label}
+        </button>
+      ))}
     </div>
   );
 }

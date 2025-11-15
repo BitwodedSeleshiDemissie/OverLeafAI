@@ -1,1 +1,10 @@
+# one of the best approaches for the case of the mvp is going to be able 
+to include a lot of features that are going to be very instrumental interms
+of making the visuals as close as possible to that of mucrosoft words. 
 
+one of the best approachs that we could use is going to be one 
+making the first element using react which is going to make the whole interface 
+one smooth of a line 
+
+"name" backend is also the module that is going to make it very possible to
+be able to make it work that is in a compatible way 
