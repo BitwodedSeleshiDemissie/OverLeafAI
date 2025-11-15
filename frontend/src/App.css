@@ -123,15 +123,19 @@ body {
 
 .preview-surface {
   flex: 1;
-  padding: 1.25rem 1.5rem;
-  font-size: 1.15rem;
-  line-height: 1.7;
-  color: #f3f4f9;
+  padding: 1.75rem 2rem;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: #1f2128;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.04);
+  font-family: 'Latin Modern Roman', 'Times New Roman', serif;
 }
 
 .placeholder {
   margin: 0;
-  color: #6d799a;
+  color: #8a8f9d;
 }
 
 .error-text {
@@ -145,21 +149,19 @@ body {
 
 .segment-block {
   margin: 0;
-  padding: 1rem 1.25rem;
-  border-radius: 0.75rem;
-  background: rgba(255, 255, 255, 0.02);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  padding: 0;
 }
 
 .segment-block + .segment-block {
-  margin-top: 1rem;
+  margin-top: 1.25rem;
 }
 
 .segment-block.text {
   font-size: 1rem;
-  color: #c6cce0;
-  line-height: 1.75;
+  color: #1f2128;
+  line-height: 1.85;
   white-space: pre-wrap;
+  padding-left: 0.5rem;
 }
 
 .segment-block.placeholder {

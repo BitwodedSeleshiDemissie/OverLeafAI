@@ -258,10 +258,11 @@ function SegmentBlock({ segment }: SegmentBlockProps) {
   }
 
   if (segment.type === 'latex') {
+    const mathWrapper = shouldDisplayMath(segment.content) ? '\\[' : '\\(';
     return (
       <div className="segment-block">
-        <MathJax dynamic inline={false}>
-          {`\\[ ${segment.content} \\]`}
+        <MathJax dynamic inline={mathWrapper === '\\('}>
+          {`${mathWrapper} ${segment.content} ${mathWrapper === '\\[' ? '\\]' : '\\)'}`}
         </MathJax>
       </div>
     );
@@ -280,30 +281,37 @@ function extractSegments(value: string): RawSegment[] {
 
   while ((match = regex.exec(value)) !== null) {
     if (match.index > lastIndex) {
-      const outside = value.slice(lastIndex, match.index).trim();
-      if (outside) {
-        output.push({ type: 'text', content: outside });
+      const outsideRaw = value.slice(lastIndex, match.index);
+      if (outsideRaw.trim()) {
+        output.push({ type: 'text', content: outsideRaw });
       }
     }
-    const inside = match[1].trim();
-    if (inside) {
-      output.push({ type: 'math', content: inside });
+    const insideRaw = match[1];
+    if (insideRaw.trim()) {
+      output.push({ type: 'math', content: insideRaw });
     }
     lastIndex = regex.lastIndex;
   }
 
   if (lastIndex < value.length) {
-    const tail = value.slice(lastIndex).trim();
-    if (tail) {
-      output.push({ type: 'text', content: tail });
+    const tailRaw = value.slice(lastIndex);
+    if (tailRaw.trim()) {
+      output.push({ type: 'text', content: tailRaw });
     }
   }
 
   if (!output.length && value.trim()) {
-    output.push({ type: 'text', content: value.trim() });
+    output.push({ type: 'text', content: value });
   }
 
   return output;
+}
+
+function shouldDisplayMath(content: string) {
+  const trimmed = content.trim();
+  if (trimmed.includes('\n')) return true;
+  if (trimmed.length > 120) return true;
+  return /\\begin|\\int|\\sum|\\lim|\\boxed|\\frac|=|\\aligned|\\cases|\\displaystyle/.test(trimmed);
 }
 
 export default App;

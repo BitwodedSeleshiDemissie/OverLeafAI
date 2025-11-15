@@ -96,12 +96,12 @@ async function convertWithOpenAI(mathInstructions) {
     '  • complex numbers, absolute values, norms, floor/ceiling, cases/piecewise definitions',
     '  • probability/expectation/variance symbols, set/logic notation, Greek letters',
     '  • tables (tabular/tabularx, multi-column alignment, captions), simple figure placeholders with \\text{Diagram: ...} or TikZ skeletons, and layout cues such as centering, alignment, spacing, or page regions.',
-    '  • contextual annotations like symbol definitions or side notes (use \\scriptsize or \\footnotesize \\text{...} positioned beside or beneath the main expression).',
+    '  • contextual annotations like symbol definitions or side notes (use \\scriptsize or \\footnotesize \\text{...} positioned beside or beneath the main expression). Resolve vague instructions (e.g., "put it to the right side of the page") with reasonable LaTeX constructs such as \\hfill, minipages, or aligned environments.',
     '  • styling commands like bar, hat, tilde, underline, boxed, overbrace, underbrace, text annotations, equation/align environments.',
-    'Honor explicit layout requests (align systems, cases, boxed expressions, multi-line derivations) and merge multiple operations described in a single instruction.',
-    'Return a JSON array of strings in the same order as the input. Do not include explanations.',
-    'Example Input: ["integral of x from 0 to 1","sqrt of 2x","place the divergence of force inside a box with symbol notes on the side"]',
-    'Example Output: ["\\\\int_{0}^{1} x \\\\, dx","\\\\sqrt{2x}","\\\\boxed{\\\\nabla \\cdot \\vec{F}}\\\\;\\\\scriptsize\\\\text{(\\\\vec{F}: force field)}"]',
+      'Honor explicit layout requests (align systems, cases, boxed expressions, multi-line derivations) and merge multiple operations described in a single instruction.',
+      'Return a JSON array of strings in the same order as the input. Do not include explanations.',
+    'Example Input: ["integral of x from 0 to 1","sqrt of 2x","center the title Analysis 1 exam exactly in the middle of the page"]',
+    'Example Output: ["\\\\int_{0}^{1} x \\\\, dx","\\\\sqrt{2x}","\\\\begin{center}\\\\textbf{Analysis 1 exam}\\\\end{center}"]',
     'Input:',
     JSON.stringify(mathInstructions),
     'Output JSON array:',
@@ -147,6 +147,13 @@ function extractArrayFromResponse(data) {
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
     console.warn('Failed to parse OpenAI JSON array:', error);
+    const fallback = stripped.match(/\[([\s\S]*)\]/);
+    if (fallback) {
+      const parts = fallback[1]
+        .split(/",\s*"/)
+        .map((item) => item.replace(/^"+|"+$/g, '').trim());
+      return parts;
+    }
     return [];
   }
 }
