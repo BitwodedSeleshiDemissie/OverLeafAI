@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { MathJax, MathJaxContext } from 'better-react-mathjax';
 import './App.css';
@@ -6,9 +6,81 @@ import 'katex/dist/katex.min.css';
 
 type Status = 'idle' | 'loading' | 'error';
 type Segment = { type: 'latex' | 'text' | 'placeholder'; content: string };
-type ConvertResponse = {
-  segments?: Segment[];
+type ConvertResponse = { segments?: Segment[] };
+type RawSegment = { type: 'math' | 'text'; content: string };
+type OutlineSummary = { label: string; kind: 'heading' | 'math' | 'list' | 'text' };
+type FormatToggle = {
+  id: string;
+  label: string;
+  description: string;
+  enableInstruction: string;
+  disableInstruction: string;
 };
+type QuickPanel = 'table' | 'layout' | null;
+
+const FORMAT_TOGGLES: FormatToggle[] = [
+  {
+    id: 'bold',
+    label: 'B',
+    description: 'Toggle bold text',
+    enableInstruction:
+      'Begin bold emphasis using \\textbf{} commands for the following sentences until bold mode is disabled.',
+    disableInstruction: 'End the \\textbf{} emphasis and return to normal paragraph text.',
+  },
+  {
+    id: 'italic',
+    label: 'I',
+    description: 'Toggle italics',
+    enableInstruction:
+      'Start italicized narration using \\textit{} for the upcoming prose until italics are disabled.',
+    disableInstruction: 'Stop wrapping text with \\textit{} and revert to the default style.',
+  },
+  {
+    id: 'underline',
+    label: 'U',
+    description: 'Toggle underline',
+    enableInstruction: 'Underline the following statements using \\underline{} until underline mode is turned off.',
+    disableInstruction: 'End the underline styling and go back to body copy.',
+  },
+  {
+    id: 'heading1',
+    label: 'H1',
+    description: 'Level-one heading',
+    enableInstruction: 'Treat the next block as a level-one heading using \\section{} for strong prominence.',
+    disableInstruction: 'Close the \\section block and resume standard paragraphs.',
+  },
+  {
+    id: 'heading2',
+    label: 'H2',
+    description: 'Level-two heading',
+    enableInstruction: 'Format the upcoming block as a level-two heading using \\subsection{} beneath the current section.',
+    disableInstruction: 'End the \\subsection heading and continue with prose.',
+  },
+  {
+    id: 'bullets',
+    label: '\u2022',
+    description: 'Bullet list',
+    enableInstruction:
+      'Start an unordered list using the \\begin{itemize} environment and keep adding \\item entries until I end the list.',
+    disableInstruction: 'Finish the unordered list by closing with \\end{itemize} and return to paragraphs.',
+  },
+  {
+    id: 'numbered',
+    label: '1.',
+    description: 'Numbered list',
+    enableInstruction:
+      'Begin an ordered list using \\begin{enumerate} with \\item steps until disabled.',
+    disableInstruction: 'Terminate the ordered list with \\end{enumerate} and go back to prose.',
+  },
+  {
+    id: 'equation',
+    label: 'fx',
+    description: 'Math block',
+    enableInstruction:
+      'Prepare for display math using equation or aligned environments; render the following expressions as LaTeX equations.',
+    disableInstruction: 'End the display math section and return to prose narration.',
+  },
+];
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000';
 
@@ -21,9 +93,25 @@ function App() {
   const [status, setStatus] = useState<Status>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [syncEnabled, setSyncEnabled] = useState(true);
+  const [parsedSegments, setParsedSegments] = useState<RawSegment[]>([]);
+  const [showRawLatex, setShowRawLatex] = useState(false);
+  const [activeFormats, setActiveFormats] = useState<Record<string, boolean>>({});
+  const [quickPanel, setQuickPanel] = useState<QuickPanel>(null);
+  const [docTitle, setDocTitle] = useState('Untitled document');
+  const [showCodeDrawer, setShowCodeDrawer] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [tableColumns, setTableColumns] = useState(3);
+  const [tableRows, setTableRows] = useState(4);
+  const [tableHeaders, setTableHeaders] = useState('Variable, Description, Units');
+  const [tableCaption, setTableCaption] = useState('Key measurements overview');
+  const [layoutColumns, setLayoutColumns] = useState(2);
+  const [layoutPrimary, setLayoutPrimary] = useState('Main derivation or argument text');
+  const [layoutSecondary, setLayoutSecondary] = useState('Proof sketch, commentary, or diagrams');
+  const [layoutMargin, setLayoutMargin] = useState('Margin notes, references, or reminders');
 
   const editorWrapperRef = useRef<HTMLDivElement>(null);
   const previewWrapperRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isSyncingRef = useRef(false);
   const latexCacheRef = useRef<Map<string, string>>(new Map());
 
@@ -33,28 +121,25 @@ function App() {
 
     if (!input.trim()) {
       setSegments([]);
+      setParsedSegments([]);
       setStatus('idle');
       setErrorMessage(null);
       return () => controller.abort();
     }
 
-    const parsedSegments = extractSegments(input);
-    const hasMathSegments = parsedSegments.some((segment) => segment.type === 'math');
+    const structured = extractSegments(input);
+    setParsedSegments(structured);
+    const hasMath = structured.some((segment) => segment.type === 'math');
 
-    if (!hasMathSegments) {
-      setSegments(
-        parsedSegments.map<Segment>((segment) => ({
-          type: 'text',
-          content: segment.content,
-        })),
-      );
+    if (!hasMath) {
+      setSegments(structured.map((segment) => ({ type: 'text', content: segment.content })));
       setStatus('idle');
       setErrorMessage(null);
       return () => controller.abort();
     }
 
     let needsConversion = false;
-    const hydratedSegments = parsedSegments.map((segment) => {
+    const hydrated = structured.map((segment) => {
       if (segment.type === 'text') {
         return { type: 'text' as const, content: segment.content };
       }
@@ -66,7 +151,7 @@ function App() {
       return { type: 'placeholder' as const, content: segment.content };
     });
 
-    setSegments(hydratedSegments);
+    setSegments(hydrated);
 
     if (!needsConversion) {
       setStatus('idle');
@@ -77,7 +162,7 @@ function App() {
     setStatus('loading');
     setErrorMessage(null);
 
-    const mathSnapshot = parsedSegments
+    const mathSnapshot = structured
       .filter((segment) => segment.type === 'math')
       .map((segment) => segment.content);
 
@@ -95,25 +180,25 @@ function App() {
         );
         const cache = new Map(latexCacheRef.current);
         latexSegments.forEach((segment, index) => {
-          const sourceInstruction = mathSnapshot[index];
-          if (sourceInstruction) {
-            cache.set(sourceInstruction, segment.content);
+          const original = mathSnapshot[index];
+          if (original) {
+            cache.set(original, segment.content);
           }
         });
         latexCacheRef.current = cache;
         setStatus('idle');
-      } catch (error) {
-        if (!isMounted || axios.isCancel(error)) {
+      } catch (conversionError) {
+        if (!isMounted || axios.isCancel(conversionError)) {
           return;
         }
         setStatus('error');
         setErrorMessage(
-          axios.isAxiosError(error)
-            ? error.response?.data?.error ?? 'Unable to convert input.'
+          axios.isAxiosError(conversionError)
+            ? conversionError.response?.data?.error ?? 'Unable to convert input.'
             : 'Unable to convert input.',
         );
       }
-    }, 400);
+    }, 350);
 
     return () => {
       isMounted = false;
@@ -121,6 +206,114 @@ function App() {
       clearTimeout(timeoutId);
     };
   }, [input]);
+
+  const getSelectionSnapshot = () => {
+    const textarea = textareaRef.current;
+    const currentValue = textarea ? textarea.value : input;
+    const start = textarea?.selectionStart ?? currentValue.length;
+    const end = textarea?.selectionEnd ?? start;
+    return { start, end, text: currentValue.slice(start, end) };
+  };
+
+  const mutateTextareaValue = (
+    compute: (
+      currentValue: string,
+      selectionStart: number,
+      selectionEnd: number,
+    ) => { value: string; cursor: number },
+    overrideStart?: number,
+    overrideEnd?: number,
+  ) => {
+    const textarea = textareaRef.current;
+    const currentValue = textarea ? textarea.value : input;
+    const selectionStart = overrideStart ?? (textarea?.selectionStart ?? currentValue.length);
+    const selectionEnd = overrideEnd ?? (textarea?.selectionEnd ?? selectionStart);
+    const { value, cursor } = compute(currentValue, selectionStart, selectionEnd);
+    setInput(value);
+    requestAnimationFrame(() => {
+      const area = textareaRef.current;
+      if (!area) return;
+      const clampedCursor = Math.min(Math.max(cursor, 0), value.length);
+      area.focus();
+      area.setSelectionRange(clampedCursor, clampedCursor);
+    });
+  };
+
+  const insertTextAtSelection = (text: string) => {
+    mutateTextareaValue((currentValue, start, end) => {
+      const before = currentValue.slice(0, start);
+      const after = currentValue.slice(end);
+      return { value: `${before}${text}${after}`, cursor: start + text.length };
+    });
+  };
+
+  const replaceSelectionWith = (replacement: string, start: number, end: number) => {
+    mutateTextareaValue(
+      (currentValue, selectionStart, selectionEnd) => {
+        const before = currentValue.slice(0, selectionStart);
+        const after = currentValue.slice(selectionEnd);
+        return { value: `${before}${replacement}${after}`, cursor: selectionStart + replacement.length };
+      },
+      start,
+      end,
+    );
+  };
+
+  const wrapInstruction = (description: string) => `*${description.trim()}*`;
+
+  const handleFormatToggle = (toggle: FormatToggle) => {
+    const { text, start, end } = getSelectionSnapshot();
+    if (text.trim()) {
+      const snippet = `${wrapInstruction(toggle.enableInstruction)}\n${text}\n${wrapInstruction(toggle.disableInstruction)}\n`;
+      replaceSelectionWith(snippet, start, end);
+      return;
+    }
+    setActiveFormats((prev) => {
+      const nextState = !prev[toggle.id];
+      const instruction = nextState ? toggle.enableInstruction : toggle.disableInstruction;
+      insertTextAtSelection(`${wrapInstruction(instruction)}\n`);
+      return { ...prev, [toggle.id]: nextState };
+    });
+  };
+
+  const handleInsertTable = () => {
+    const normalizedColumns = clampValue(tableColumns, 2, 6);
+    const normalizedRows = clampValue(tableRows, 2, 12);
+    const headers = tableHeaders
+      .split(',')
+      .map((header) => header.trim())
+      .filter(Boolean)
+      .join(', ');
+    const headerSnippet = headers || 'custom headers of your choice';
+    const caption = tableCaption.trim() || 'Key data overview';
+    const instruction = `Insert a ${normalizedColumns}-column table with ${normalizedRows} rows titled "${caption}". Use headers ${headerSnippet} and place the caption beneath the table.`;
+    insertTextAtSelection(`${wrapInstruction(instruction)}\n\n`);
+    setQuickPanel(null);
+  };
+
+  const handleInsertLayout = () => {
+    const normalizedColumns = clampValue(layoutColumns, 2, 3);
+    const instruction = `Create a ${normalizedColumns}-column layout using minipage or multicolumn constructs: column one emphasises ${layoutPrimary.trim() || 'primary content'}, column two focuses on ${layoutSecondary.trim() || 'supporting commentary'}, and reserve a slim margin for ${layoutMargin.trim() || 'notes'}. Balance spacing so it feels like a polished document editor.`;
+    insertTextAtSelection(`${wrapInstruction(instruction)}\n\n`);
+    setQuickPanel(null);
+  };
+
+  const handleInsertEquation = () => {
+    const instruction =
+      'Insert a display-style equation using the aligned environment, annotate critical variables below it, and include an equation number for reference.';
+    insertTextAtSelection(`${wrapInstruction(instruction)}\n\n`);
+  };
+
+  const createNumberChangeHandler =
+    (setter: (value: number) => void, fallback: number) =>
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const parsed = Number(event.target.value);
+      setter(Number.isFinite(parsed) ? parsed : fallback);
+    };
+
+  const handleTableColumnsChange = createNumberChangeHandler(setTableColumns, 3);
+  const handleTableRowsChange = createNumberChangeHandler(setTableRows, 4);
+  const handleLayoutColumnsChange = createNumberChangeHandler(setLayoutColumns, 2);
 
   const handleScroll = (source: 'editor' | 'preview') => {
     if (!syncEnabled || isSyncingRef.current) return;
@@ -139,9 +332,51 @@ function App() {
 
     isSyncingRef.current = true;
     targetEl.scrollTo({ top: nextTop });
-    window.requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
       isSyncingRef.current = false;
     });
+  };
+
+  const latexDocument = useMemo(() => buildLatexDocument(docTitle, segments), [docTitle, segments]);
+
+  const handleCopyLatex = async () => {
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(latexDocument);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = latexDocument;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopyState('copied');
+      setTimeout(() => setCopyState('idle'), 2000);
+    } catch {
+      setCopyState('error');
+      setTimeout(() => setCopyState('idle'), 2000);
+    }
+  };
+
+  const handleDownloadLatex = () => {
+    try {
+      const blob = new Blob([latexDocument], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${(docTitle || 'document').replace(/\s+/g, '_')}.tex`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch {
+      setCopyState('error');
+      setTimeout(() => setCopyState('idle'), 2000);
+    }
   };
 
   return (
@@ -162,14 +397,26 @@ function App() {
     >
       <div className="app-shell">
         <header className="app-header">
-          <div>
-            <h1>OverLeaf AI</h1>
+          <div className="header-left">
+            <div className="doc-title-row">
+              <input
+                className="doc-title-input"
+                value={docTitle}
+                onChange={(event) => setDocTitle(event.target.value)}
+                spellCheck={false}
+              />
+              <span className="doc-badge">OverLeaf AI</span>
+            </div>
             <p>
-              Wrap math instructions between <code>*asterisks*</code> to convert them. Text outside
-              those markers appears exactly as written.
+              Wrap math or layout instructions between <code>*asterisks*</code> to convert them. Text outside those
+              markers stays as-is.
             </p>
+            <FormatToggleBar toggles={FORMAT_TOGGLES} active={activeFormats} onToggle={handleFormatToggle} />
           </div>
           <div className="header-actions">
+            <button type="button" className="secondary-button" onClick={() => setShowCodeDrawer(true)}>
+              View LaTeX
+            </button>
             <button
               type="button"
               className={`toggle ${syncEnabled ? 'enabled' : ''}`}
@@ -189,27 +436,158 @@ function App() {
                 </p>
               </div>
             </div>
-            <textarea
-              className="prose-editor"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="Use *...* around mathematical instructions and keep the prose outside."
-            />
+            <div className="editor-pane">
+              <DocumentOutline segments={parsedSegments} />
+              <div className="quick-insert">
+                <span className="quick-label">Quick insert</span>
+                <div className="quick-buttons">
+                  <button
+                    type="button"
+                    className={`quick-button ${quickPanel === 'table' ? 'active' : ''}`}
+                    onClick={() => setQuickPanel((prev) => (prev === 'table' ? null : 'table'))}
+                  >
+                    Table
+                  </button>
+                  <button
+                    type="button"
+                    className={`quick-button ${quickPanel === 'layout' ? 'active' : ''}`}
+                    onClick={() => setQuickPanel((prev) => (prev === 'layout' ? null : 'layout'))}
+                  >
+                    Columns
+                  </button>
+                  <button type="button" className="quick-button" onClick={handleInsertEquation}>
+                    Equation
+                  </button>
+                </div>
+              </div>
+              {quickPanel === 'table' ? (
+                <div className="insert-panel">
+                  <div className="insert-panel-grid">
+                    <label className="insert-field">
+                      <span>Columns</span>
+                      <input
+                        type="number"
+                        min={2}
+                        max={6}
+                        value={tableColumns}
+                        onChange={handleTableColumnsChange}
+                      />
+                    </label>
+                    <label className="insert-field">
+                      <span>Rows</span>
+                      <input
+                        type="number"
+                        min={2}
+                        max={12}
+                        value={tableRows}
+                        onChange={handleTableRowsChange}
+                      />
+                    </label>
+                    <label className="insert-field wide">
+                      <span>Headers</span>
+                      <input
+                        type="text"
+                        value={tableHeaders}
+                        onChange={(event) => setTableHeaders(event.target.value)}
+                        placeholder="Variable, Description, Units"
+                      />
+                    </label>
+                    <label className="insert-field wide">
+                      <span>Caption</span>
+                      <input
+                        type="text"
+                        value={tableCaption}
+                        onChange={(event) => setTableCaption(event.target.value)}
+                        placeholder="Key measurements overview"
+                      />
+                    </label>
+                  </div>
+                  <button type="button" className="insert-panel-action" onClick={handleInsertTable}>
+                    Insert table instruction
+                  </button>
+                </div>
+              ) : null}
+              {quickPanel === 'layout' ? (
+                <div className="insert-panel">
+                  <div className="insert-panel-grid">
+                    <label className="insert-field">
+                      <span>Columns</span>
+                      <input
+                        type="number"
+                        min={2}
+                        max={3}
+                        value={layoutColumns}
+                        onChange={handleLayoutColumnsChange}
+                      />
+                    </label>
+                    <label className="insert-field wide">
+                      <span>Column 1 focus</span>
+                      <textarea
+                        rows={2}
+                        value={layoutPrimary}
+                        onChange={(event) => setLayoutPrimary(event.target.value)}
+                      />
+                    </label>
+                    <label className="insert-field wide">
+                      <span>Column 2 focus</span>
+                      <textarea
+                        rows={2}
+                        value={layoutSecondary}
+                        onChange={(event) => setLayoutSecondary(event.target.value)}
+                      />
+                    </label>
+                    <label className="insert-field wide">
+                      <span>Margin notes</span>
+                      <textarea
+                        rows={2}
+                        value={layoutMargin}
+                        onChange={(event) => setLayoutMargin(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <button type="button" className="insert-panel-action" onClick={handleInsertLayout}>
+                    Insert column layout instruction
+                  </button>
+                </div>
+              ) : null}
+              <div className="editor-paper">
+                <textarea
+                  ref={textareaRef}
+                  className="prose-editor"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  placeholder="Use *...* around conversion instructions and keep commentary outside."
+                />
+              </div>
+            </div>
           </section>
           <section className="pane" ref={previewWrapperRef} onScroll={() => handleScroll('preview')}>
             <div className="pane-heading preview-heading">
               <div>
                 <h2>LaTeX Preview</h2>
-                <p>Rendered in real time via MathJax</p>
+                <p>{showRawLatex ? 'Inspect the generated LaTeX' : 'Rendered in real time via MathJax'}</p>
               </div>
-              <StatusPill status={status} errorMessage={errorMessage} />
+              <div className="preview-controls">
+                <button
+                  type="button"
+                  className={`toggle ${showRawLatex ? 'enabled' : ''}`}
+                  onClick={() => setShowRawLatex((prev) => !prev)}
+                >
+                  {showRawLatex ? 'Show Rendered View' : 'Show Raw LaTeX'}
+                </button>
+                <StatusPill status={status} errorMessage={errorMessage} />
+              </div>
             </div>
-            <div className="preview-surface">
+            <div className={`preview-surface ${showRawLatex ? 'code-mode' : ''}`}>
               {status === 'error' && errorMessage ? (
                 <p className="error-text">{errorMessage}</p>
               ) : segments.length ? (
                 segments.map((segment, index) => (
-                  <SegmentBlock key={`${segment.type}-${index}`} segment={segment} />
+                  <SegmentBlock
+                    key={`${segment.type}-${index}`}
+                    segment={segment}
+                    showRawLatex={showRawLatex}
+                  />
                 ))
               ) : (
                 <p className="placeholder">
@@ -219,18 +597,34 @@ function App() {
             </div>
           </section>
         </main>
+        <LatexDrawer
+          open={showCodeDrawer}
+          latex={latexDocument}
+          onClose={() => setShowCodeDrawer(false)}
+          onCopy={handleCopyLatex}
+          onDownload={handleDownloadLatex}
+          copyState={copyState}
+        />
       </div>
     </MathJaxContext>
   );
 }
 
-type StatusPillProps = {
-  status: Status;
-  errorMessage: string | null;
+type StatusPillProps = { status: Status; errorMessage: string | null };
+type SegmentBlockProps = { segment: Segment; showRawLatex: boolean };
+type FormatToggleBarProps = {
+  toggles: FormatToggle[];
+  active: Record<string, boolean>;
+  onToggle: (toggle: FormatToggle) => void;
 };
-
-type SegmentBlockProps = {
-  segment: Segment;
+type DocumentOutlineProps = { segments: RawSegment[] };
+type LatexDrawerProps = {
+  open: boolean;
+  latex: string;
+  onClose: () => void;
+  onCopy: () => void;
+  onDownload: () => void;
+  copyState: 'idle' | 'copied' | 'error';
 };
 
 function StatusPill({ status, errorMessage }: StatusPillProps) {
@@ -247,7 +641,7 @@ function StatusPill({ status, errorMessage }: StatusPillProps) {
   );
 }
 
-function SegmentBlock({ segment }: SegmentBlockProps) {
+function SegmentBlock({ segment, showRawLatex }: SegmentBlockProps) {
   if (segment.type === 'placeholder') {
     return (
       <p className="segment-block placeholder">
@@ -258,6 +652,23 @@ function SegmentBlock({ segment }: SegmentBlockProps) {
   }
 
   if (segment.type === 'latex') {
+    const structural = parseStructuralLatex(segment.content);
+    if (structural && !showRawLatex) {
+      if (structural.kind === 'heading' && structural.preview) {
+        return <h3 className="structural-heading">{structural.preview}</h3>;
+      }
+      if (structural.preview) {
+        return <p className="structural-preview">{structural.preview}</p>;
+      }
+      return null;
+    }
+    if (showRawLatex || structural) {
+      return (
+        <div className="segment-block">
+          <pre className="latex-code">{segment.content}</pre>
+        </div>
+      );
+    }
     const mathWrapper = shouldDisplayMath(segment.content) ? '\\[' : '\\(';
     return (
       <div className="segment-block">
@@ -271,7 +682,170 @@ function SegmentBlock({ segment }: SegmentBlockProps) {
   return <p className="segment-block text">{segment.content}</p>;
 }
 
-type RawSegment = { type: 'math' | 'text'; content: string };
+function FormatToggleBar({ toggles, active, onToggle }: FormatToggleBarProps) {
+  return (
+    <div className="format-toggle-bar">
+      {toggles.map((toggle) => {
+        const isActive = Boolean(active[toggle.id]);
+        return (
+          <button
+            key={toggle.id}
+            type="button"
+            className={`format-button ${isActive ? 'active' : ''}`}
+            title={toggle.description}
+            onClick={() => onToggle(toggle)}
+          >
+            {toggle.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DocumentOutline({ segments }: DocumentOutlineProps) {
+  if (!segments.length) {
+    return (
+      <div className="outline-chips empty">
+        <span className="outline-chip text">Start typing to build the structure</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="outline-chips">
+      {segments.map((segment, index) => {
+        const summary = summarizeSegmentForOutline(segment);
+        return (
+          <span key={`outline-${summary.kind}-${index}`} className={`outline-chip ${summary.kind}`}>
+            {summary.label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function LatexDrawer({ open, latex, onClose, onCopy, onDownload, copyState }: LatexDrawerProps) {
+  if (!open) return null;
+  return (
+    <div className="latex-drawer">
+      <div className="latex-drawer-panel">
+        <div className="latex-drawer-header">
+          <div>
+            <h3>Document LaTeX</h3>
+            <p>Copy or download everything the AI generated.</p>
+          </div>
+          <div className="latex-drawer-actions">
+            <button type="button" className="secondary-button" onClick={onCopy}>
+              {copyState === 'copied' ? 'Copied!' : copyState === 'error' ? 'Copy failed' : 'Copy to clipboard'}
+            </button>
+            <button type="button" className="secondary-button" onClick={onDownload}>
+              Download .tex
+            </button>
+            <button type="button" className="toggle" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+        <textarea className="latex-export-area" value={latex} readOnly spellCheck={false} />
+      </div>
+    </div>
+  );
+}
+
+function summarizeSegmentForOutline(segment: RawSegment): OutlineSummary {
+  if (segment.type === 'math') {
+    return { kind: 'math', label: `Math: ${getPreviewFromContent(segment.content)}` };
+  }
+  const trimmed = segment.content.trim();
+  if (/heading|title|section/i.test(trimmed)) {
+    return { kind: 'heading', label: `Heading: ${getPreviewFromContent(trimmed)}` };
+  }
+  if (/list|bullet|numbered|steps?/i.test(trimmed)) {
+    return { kind: 'list', label: `List: ${getPreviewFromContent(trimmed)}` };
+  }
+  return { kind: 'text', label: `Text: ${getPreviewFromContent(trimmed)}` };
+}
+
+function getPreviewFromContent(value: string) {
+  const condensed = value.replace(/\s+/g, ' ').trim();
+  if (!condensed) return 'Details pending';
+  return condensed.length > 36 ? `${condensed.slice(0, 33)}...` : condensed;
+}
+
+function parseStructuralLatex(content: string) {
+  const structuralEnvs = [
+    'itemize',
+    'enumerate',
+    'tabular',
+    'tabularx',
+    'table',
+    'figure',
+    'tikzpicture',
+    'minipage',
+    'multicols',
+    'center',
+    'flushleft',
+    'flushright',
+  ];
+  const trimmed = content.trim();
+  const matchEnv = structuralEnvs.find(
+    (env) => trimmed.includes(`\\begin{${env}}`) || trimmed.includes(`\\end{${env}}`),
+  );
+  if (matchEnv) {
+    const label =
+      matchEnv === 'itemize' || matchEnv === 'enumerate'
+        ? 'List'
+        : matchEnv === 'center'
+        ? 'Centered text'
+        : matchEnv === 'flushleft' || matchEnv === 'flushright'
+          ? 'Aligned text'
+          : 'Layout';
+    const preview = extractPlainTextFromLatex(trimmed);
+    return {
+      label,
+      kind: label === 'List' ? 'list' : label === 'Layout' ? 'layout' : 'text',
+      preview,
+    };
+  }
+  if (/\\item\s/.test(trimmed) && !trimmed.includes('\\begin{aligned}')) {
+    return {
+      label: 'List',
+      kind: 'list',
+      preview: extractPlainTextFromLatex(trimmed),
+    };
+  }
+  if (/\\(sub)?(sub)?section\{/.test(trimmed)) {
+    return {
+      label: 'Heading',
+      kind: 'heading',
+      preview: extractPlainTextFromLatex(trimmed),
+    };
+  }
+  const textOnly = /\\textbf\{|\\textit\{|\\underline\{/.test(trimmed);
+  if (textOnly && !/\\int|\\sum|\\frac|\\lim|\\begin{aligned}/.test(trimmed)) {
+    return {
+      label: 'Text block',
+      kind: 'text',
+      preview: extractPlainTextFromLatex(trimmed),
+    };
+  }
+  return null;
+}
+
+function extractPlainTextFromLatex(input: string) {
+  let output = input;
+  output = output.replace(/\\begin\{.*?}\s*/g, '').replace(/\\end\{.*?}\s*/g, '');
+  output = output.replace(/\\textbf\{([^}]*)}/g, '$1');
+  output = output.replace(/\\textit\{([^}]*)}/g, '$1');
+  output = output.replace(/\\underline\{([^}]*)}/g, '$1');
+  output = output.replace(/\\text\{([^}]*)}/g, '$1');
+  output = output.replace(/\\\[|\\\]|\$|\{|\}/g, ' ');
+  output = output.replace(/\\[a-zA-Z]+/g, '');
+  output = output.replace(/\s+/g, ' ').trim();
+  return output.length ? output : null;
+}
 
 function extractSegments(value: string): RawSegment[] {
   const output: RawSegment[] = [];
@@ -281,22 +855,22 @@ function extractSegments(value: string): RawSegment[] {
 
   while ((match = regex.exec(value)) !== null) {
     if (match.index > lastIndex) {
-      const outsideRaw = value.slice(lastIndex, match.index);
-      if (outsideRaw.trim()) {
-        output.push({ type: 'text', content: outsideRaw });
+      const outside = value.slice(lastIndex, match.index);
+      if (outside.trim()) {
+        output.push({ type: 'text', content: outside });
       }
     }
-    const insideRaw = match[1];
-    if (insideRaw.trim()) {
-      output.push({ type: 'math', content: insideRaw });
+    const inside = match[1];
+    if (inside.trim()) {
+      output.push({ type: 'math', content: inside });
     }
     lastIndex = regex.lastIndex;
   }
 
   if (lastIndex < value.length) {
-    const tailRaw = value.slice(lastIndex);
-    if (tailRaw.trim()) {
-      output.push({ type: 'text', content: tailRaw });
+    const tail = value.slice(lastIndex);
+    if (tail.trim()) {
+      output.push({ type: 'text', content: tail });
     }
   }
 
@@ -312,6 +886,61 @@ function shouldDisplayMath(content: string) {
   if (trimmed.includes('\n')) return true;
   if (trimmed.length > 120) return true;
   return /\\begin|\\int|\\sum|\\lim|\\boxed|\\frac|=|\\aligned|\\cases|\\displaystyle/.test(trimmed);
+}
+
+function clampValue(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function buildLatexDocument(title: string, segments: Segment[]) {
+  const escapedTitle = escapeLatexText(title || 'Untitled document');
+  const body = segments.length
+    ? segments
+        .map((segment) => {
+          if (segment.type === 'latex') return segment.content;
+          if (segment.type === 'text') return escapeLatexParagraph(segment.content);
+          return `% pending conversion for: ${segment.content}`;
+        })
+        .join('\n\n')
+    : '% Start writing to generate content.';
+  return [
+    '\\documentclass{article}',
+    '\\usepackage{amsmath}',
+    '\\usepackage{amssymb}',
+    '\\usepackage{graphicx}',
+    '\\usepackage{array}',
+    '\\usepackage{enumitem}',
+    '\\usepackage{tikz}',
+    '',
+    `\\title{${escapedTitle}}`,
+    '\\date{}',
+    '',
+    '\\begin{document}',
+    '\\maketitle',
+    '',
+    body,
+    '',
+    '\\end{document}',
+  ].join('\n');
+}
+
+function escapeLatexParagraph(text: string) {
+  const escaped = escapeLatexText(text);
+  return escaped ? `${escaped}\n` : '';
+}
+
+function escapeLatexText(text: string) {
+  return text
+    .replace(/\\/g, '\\textbackslash{}')
+    .replace(/([{}_])/g, '\\$1')
+    .replace(/\^/g, '\\^{}')
+    .replace(/~/g, '\\textasciitilde{}')
+    .replace(/%/g, '\\%')
+    .replace(/&/g, '\\&')
+    .replace(/#/g, '\\#');
 }
 
 export default App;
