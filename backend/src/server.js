@@ -2,10 +2,21 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const { jsonrepair } = require('jsonrepair');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { randomUUID } = require('crypto');
+const { promisify } = require('util');
+const { execFile } = require('child_process');
 require('dotenv').config();
 
 const PORT = process.env.PORT || 4000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const LATEX_COMPILER = process.env.LATEX_COMPILER || 'tectonic';
+const ALLOW_REMOTE_COMPILER = process.env.ALLOW_REMOTE_COMPILER !== 'false';
+const COMPILE_TIMEOUT_MS = Number(process.env.COMPILE_TIMEOUT_MS) || 60000;
+const REMOTE_TIMEOUT_MS = Number(process.env.REMOTE_TIMEOUT_MS) || 60000;
+const execFileAsync = promisify(execFile);
 
 const app = express();
 app.use(cors());
@@ -33,6 +44,29 @@ app.post('/convert', async (req, res) => {
     console.error('Conversion failed', error);
     res.status(500).json({
       error: 'Failed to convert input to LaTeX. Check server logs for details.',
+    });
+  }
+});
+
+app.post('/export-pdf', async (req, res) => {
+  const { latex, filename } = req.body || {};
+  if (!latex || typeof latex !== 'string') {
+    return res.status(400).json({ error: 'Body must include a "latex" string.' });
+  }
+
+  const safeName = (filename && typeof filename === 'string' ? filename : 'document').replace(/\s+/g, '_');
+  try {
+    const { buffer, from, log } = await compileLatex(latex);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}.pdf"`);
+    res.setHeader('X-Compiler', from);
+    return res.send(buffer);
+  } catch (error) {
+    console.error('Export PDF failed', error);
+    const logTail = error?.log || '';
+    return res.status(500).json({
+      error: 'LaTeX compilation failed. Ensure a TeX engine (tectonic or pdflatex) is installed on the server.',
+      log: logTail,
     });
   }
 });
@@ -216,6 +250,75 @@ function extractSegments(input) {
   }
 
   return segments;
+}
+
+async function readLogTail(workDir) {
+  const logPath = path.join(workDir, 'document.log');
+  try {
+    const logContent = await fs.promises.readFile(logPath, 'utf8');
+    return logContent.split('\n').slice(-25).join('\n');
+  } catch (error) {
+    return '';
+  }
+}
+
+async function compileLatex(latex) {
+  const workDir = path.join(os.tmpdir(), `overleafai-${randomUUID()}`);
+  const texPath = path.join(workDir, 'document.tex');
+  const pdfPath = path.join(workDir, 'document.pdf');
+
+  try {
+    await fs.promises.mkdir(workDir, { recursive: true });
+    await fs.promises.writeFile(texPath, latex, 'utf8');
+
+    const isTectonic = LATEX_COMPILER.toLowerCase() === 'tectonic';
+    const args = isTectonic
+      ? ['--synctex', '--keep-logs', '--keep-intermediates', 'document.tex']
+      : ['-interaction=nonstopmode', '-halt-on-error', 'document.tex'];
+    const command = LATEX_COMPILER || 'tectonic';
+
+    try {
+      await execFileAsync(command, args, { cwd: workDir, timeout: COMPILE_TIMEOUT_MS });
+    } catch (error) {
+      const logTail = await readLogTail(workDir);
+      if (ALLOW_REMOTE_COMPILER) {
+        return await compileLatexRemotely(latex, logTail);
+      }
+      error.log = logTail;
+      throw error;
+    }
+
+    const pdfBuffer = await fs.promises.readFile(pdfPath);
+    return { buffer: pdfBuffer, from: 'local', log: '' };
+  } finally {
+    try {
+      await fs.promises.rm(workDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.warn('Cleanup failed', cleanupError);
+    }
+  }
+}
+
+async function compileLatexRemotely(latex, logTail = '') {
+  try {
+    const { data } = await axios.post(
+      'https://rtex.probablyaweb.site/api/v2',
+      { code: latex, format: 'pdf' },
+      { timeout: REMOTE_TIMEOUT_MS },
+    );
+    if (!data?.status || data.status !== 'success' || !data.result) {
+      throw new Error('Remote compiler failed');
+    }
+    const pdfResponse = await axios.get(data.result, {
+      responseType: 'arraybuffer',
+      timeout: REMOTE_TIMEOUT_MS,
+    });
+    return { buffer: Buffer.from(pdfResponse.data), from: 'remote', log: logTail };
+  } catch (error) {
+    const err = new Error('Remote LaTeX compilation failed');
+    err.log = logTail || error?.message || '';
+    throw err;
+  }
 }
 
 app.listen(PORT, () => {

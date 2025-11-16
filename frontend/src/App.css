@@ -177,6 +177,13 @@ code {
   transform: scale(0.99);
 }
 
+.secondary-button.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .toggle.enabled {
   border-color: rgba(64, 243, 192, 0.7);
   background: linear-gradient(120deg, rgba(64, 243, 192, 0.25), rgba(157, 123, 255, 0.18));
@@ -213,15 +220,6 @@ code {
   pointer-events: none;
 }
 
-.preview-pane {
-  background: #0a0f1d;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.preview-pane::before {
-  display: none;
-}
-
 .pane-heading {
   position: sticky;
   top: 0;
@@ -249,11 +247,6 @@ code {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-}
-
-.preview-pane .pane-heading {
-  background: linear-gradient(180deg, rgba(12, 19, 35, 0.9), rgba(12, 19, 35, 0.7));
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .preview-controls {
@@ -389,35 +382,6 @@ code {
   color: #0b1428;
 }
 
-.placement-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.placement-pill {
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
-  padding: 0.5rem 0.85rem;
-  border-radius: 0.85rem;
-  cursor: pointer;
-  font-weight: 650;
-  transition: transform 0.12s ease, box-shadow 0.2s, background 0.2s, border-color 0.2s;
-}
-
-.placement-pill:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16);
-}
-
-.placement-pill.active {
-  background: linear-gradient(120deg, rgba(64, 243, 192, 0.28), rgba(157, 123, 255, 0.24));
-  border-color: rgba(64, 243, 192, 0.32);
-  color: #0b1428;
-}
-
 .insert-panel {
   background: rgba(16, 26, 50, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -521,12 +485,11 @@ code {
 
 .preview-surface {
   padding: 1.25rem 1.5rem 1.75rem;
-  background: #0e1524;
+  background: rgba(255, 255, 255, 0.02);
   border-radius: 1.1rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  margin: 1rem auto 1.5rem;
-  max-width: 920px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 1rem 1.5rem 1.5rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   min-height: 200px;
 }
 
@@ -677,6 +640,74 @@ code {
   font-size: 0.95rem;
   padding: 1rem 1.25rem;
   resize: vertical;
+}
+
+@media print {
+  body {
+    background: #ffffff;
+    color: #000000;
+  }
+
+  .app-shell {
+    background: #ffffff;
+    color: #000000;
+  }
+
+  .app-header,
+  .editor-pane,
+  .latex-drawer,
+  .quick-insert,
+  .outline-chips,
+  .preview-controls .toggle,
+  .preview-controls .status-pill,
+  .format-toggle-bar {
+    display: none !important;
+  }
+
+  .workspace {
+    display: block;
+    padding: 0;
+    margin: 0;
+    background: #ffffff;
+  }
+
+  .pane {
+    box-shadow: none;
+    border: none;
+    background: #ffffff;
+  }
+
+  .pane::before {
+    display: none;
+  }
+
+  .preview-pane {
+    display: block !important;
+  }
+
+  .pane-heading {
+    position: static;
+    background: transparent;
+    border: none;
+  }
+
+  .preview-surface {
+    margin: 0;
+    border: none;
+    box-shadow: none;
+    background: #ffffff;
+    color: #000000;
+  }
+
+  .preview-surface.code-mode {
+    background: #ffffff;
+  }
+
+  .latex-code {
+    background: #ffffff;
+    color: #000000;
+    border: none;
+  }
 }
 
 @media (max-width: 1024px) {
