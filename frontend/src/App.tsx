@@ -10,7 +10,8 @@ type ConvertResponse = { segments?: Segment[] };
 type RawSegment = { type: 'math' | 'text'; content: string };
 type OutlineSummary = { label: string; kind: 'heading' | 'math' | 'list' | 'text' };
 type FormatToggle = { id: string; label: string };
-type QuickPanel = 'table' | 'layout' | null;
+type QuickPanel = 'table' | 'layout' | 'equation' | null;
+type EquationPlacement = 'inline' | 'left' | 'center' | 'right';
 
 const FORMAT_TOGGLES: FormatToggle[] = [
   { id: 'bold', label: 'B' },
@@ -48,6 +49,9 @@ function App() {
   const [layoutPrimary, setLayoutPrimary] = useState('Main derivation or argument text');
   const [layoutSecondary, setLayoutSecondary] = useState('Proof sketch, commentary, or diagrams');
   const [layoutMargin, setLayoutMargin] = useState('Margin notes, references, or reminders');
+  const [equationPlacement, setEquationPlacement] = useState<EquationPlacement>('center');
+  const [equationLabel, setEquationLabel] = useState('Eq. 1');
+  const [equationAnchor, setEquationAnchor] = useState('near the result discussion so it reads naturally');
 
   const editorWrapperRef = useRef<HTMLDivElement>(null);
   const previewWrapperRef = useRef<HTMLDivElement>(null);
@@ -234,9 +238,22 @@ function App() {
   };
 
   const handleInsertEquation = () => {
-    const instruction =
-      'Insert a display-style equation using the aligned environment, annotate critical variables below it, and include an equation number for reference.';
+    const placementDetails: Record<EquationPlacement, string> = {
+      center: 'Render the equation in its own centered block using the equation environment so it feels like a primary element.',
+      inline: 'Keep the equation inline with surrounding text so the baseline flows without extra vertical spacing.',
+      left: 'Align the equation to the left using a flushleft block with a bit of gutter space on the right so text never overlaps.',
+      right: 'Align the equation to the right using a flushright block, treating it like a margin callout that stays coherent with nearby text.',
+    };
+    const anchorInstruction = equationAnchor.trim()
+      ? `Anchor it ${equationAnchor.trim()} and keep nearby paragraphs clear.`
+      : 'Anchor it exactly where the reader expects it, without overlapping adjacent content.';
+    const numberingInstruction =
+      equationPlacement === 'inline'
+        ? 'Leave it unnumbered to avoid breaking text flow.'
+        : `Tag it as "${equationLabel.trim() || 'Eq.'}" using \\label/\\tag so cross-references stay correct.`;
+    const instruction = `${placementDetails[equationPlacement]} ${anchorInstruction} ${numberingInstruction} Ensure the LaTeX stays Overleaf-safe and add a short variable note beneath if it aids clarity.`;
     insertTextAtSelection(`${wrapInstruction(instruction)}\n\n`);
+    setQuickPanel(null);
   };
 
   const createNumberChangeHandler =
@@ -390,7 +407,11 @@ function App() {
                   >
                     Columns
                   </button>
-                  <button type="button" className="quick-button" onClick={handleInsertEquation}>
+                  <button
+                    type="button"
+                    className={`quick-button ${quickPanel === 'equation' ? 'active' : ''}`}
+                    onClick={() => setQuickPanel((prev) => (prev === 'equation' ? null : 'equation'))}
+                  >
                     Equation
                   </button>
                 </div>
@@ -485,6 +506,51 @@ function App() {
                   </button>
                 </div>
               ) : null}
+              {quickPanel === 'equation' ? (
+                <div className="insert-panel">
+                  <div className="placement-pills" role="group" aria-label="Equation placement">
+                    {(['center', 'inline', 'left', 'right'] as EquationPlacement[]).map((placement) => (
+                      <button
+                        key={placement}
+                        type="button"
+                        className={`placement-pill ${equationPlacement === placement ? 'active' : ''}`}
+                        onClick={() => setEquationPlacement(placement)}
+                      >
+                        {placement === 'center'
+                          ? 'Centered block'
+                          : placement === 'inline'
+                          ? 'Inline'
+                          : placement === 'left'
+                          ? 'Left aligned'
+                          : 'Right aligned'}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="insert-panel-grid">
+                    <label className="insert-field">
+                      <span>Equation tag / reference</span>
+                      <input
+                        type="text"
+                        value={equationLabel}
+                        onChange={(event) => setEquationLabel(event.target.value)}
+                        placeholder="Eq. 2.1"
+                      />
+                    </label>
+                    <label className="insert-field wide">
+                      <span>Where should it sit?</span>
+                      <textarea
+                        rows={2}
+                        value={equationAnchor}
+                        onChange={(event) => setEquationAnchor(event.target.value)}
+                        placeholder="e.g., beside the results paragraph or under Figure 2"
+                      />
+                    </label>
+                  </div>
+                  <button type="button" className="insert-panel-action" onClick={handleInsertEquation}>
+                    Insert equation request
+                  </button>
+                </div>
+              ) : null}
               <div className="editor-paper">
                 <textarea
                   ref={textareaRef}
@@ -496,7 +562,7 @@ function App() {
               </div>
             </div>
           </section>
-          <section className="pane" ref={previewWrapperRef} onScroll={() => handleScroll('preview')}>
+          <section className="pane preview-pane" ref={previewWrapperRef} onScroll={() => handleScroll('preview')}>
             <div className="pane-heading preview-heading">
               <div>
                 <h2>LaTeX Preview</h2>
